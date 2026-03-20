@@ -1,6 +1,6 @@
 # Architecture
 
-**autonovel** is an autonomous pipeline that generates complete novels from a seed concept. Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch), it applies a modify → evaluate → keep/discard loop to fiction writing, producing print-ready PDFs, ePubs, audiobooks, and landing pages.
+**autonovel** is an autonomous pipeline that generates complete novels from a seed concept. Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch), it applies a modify → evaluate → keep/discard loop to fiction writing, producing print-ready PDFs.
 
 First production: *The Second Son of the House of Bells* — 19 chapters, 79,456 words, 6 revision cycles.
 
@@ -27,9 +27,9 @@ Supporting documents: `MYSTERY.md` (central secret, author-only), `program.md` (
 
 ```
 seed.txt ──► PHASE 1: FOUNDATION ──► PHASE 2: DRAFTING ──► PHASE 3: REVISION ──► PHASE 4: EXPORT
-              (world, characters,      (sequential chapter    (adversarial edit,    (PDF, ePub,
-               outline, voice,          drafting with          reader panel,         audiobook,
-               canon, mystery)          eval gates)            Opus review loop)     cover art)
+              (world, characters,      (sequential chapter    (adversarial edit,    (PDF)
+               outline, voice,          drafting with          reader panel,
+               canon, mystery)          eval gates)            Opus review loop)
 ```
 
 Orchestrated by `run_pipeline.py` (892 lines). State tracked in `state.json`.
@@ -88,11 +88,6 @@ Supporting tools: `compare_chapters.py` (Elo tournament ranking)
 | Arc summary | `build_arc_summary.py` |
 | Outline rebuild | `build_outline.py` |
 | PDF (trade paperback) | `typeset/build_tex.py` → `tectonic novel.tex` |
-| ePub | `typeset/epub_metadata.yaml` + `epub_style.css` |
-| Cover art | `gen_art.py` → `gen_cover_composite.py` → `gen_cover_print.py` |
-| Art directions | `gen_art_directions.py` |
-| Audiobook | `gen_audiobook_script.py` → `gen_audiobook.py` |
-| Landing page | `landing/index.html` |
 
 ---
 
@@ -119,7 +114,7 @@ Scores across dimensions: prose quality, voice adherence, character distinctiven
 
 ---
 
-## Script Inventory (27 Python files)
+## Script Inventory (21 Python files)
 
 ### Foundation (7)
 `seed.py` · `gen_world.py` · `gen_characters.py` · `gen_outline.py` · `gen_outline_part2.py` · `gen_canon.py` · `voice_fingerprint.py`
@@ -132,12 +127,6 @@ Scores across dimensions: prose quality, voice adherence, character distinctiven
 
 ### Revision (3)
 `gen_brief.py` · `gen_revision.py` · `apply_cuts.py`
-
-### Art & Cover (4)
-`gen_art.py` · `gen_art_directions.py` · `gen_cover_composite.py` · `gen_cover_print.py`
-
-### Audiobook (2)
-`gen_audiobook_script.py` · `gen_audiobook.py`
 
 ### Orchestration & Utilities (3)
 `run_pipeline.py` · `build_arc_summary.py` · `build_outline.py`
@@ -152,8 +141,6 @@ Scores across dimensions: prose quality, voice adherence, character distinctiven
 | Service | Purpose | Models / Endpoints | Env Var |
 |---------|---------|--------------------|---------|
 | **Anthropic** | Writing, evaluation, review | Sonnet 4.6 (writer), Opus 4.6 (judge/review) | `ANTHROPIC_API_KEY` |
-| **fal.ai** | Cover art, ornaments | Nano Banana 2 | `FAL_KEY` |
-| **ElevenLabs** | Multi-voice audiobook | 13 character voices + narrator | `ELEVENLABS_API_KEY` |
 
 All API calls use `httpx` directly against REST endpoints. Anthropic calls include `anthropic-beta: context-1m-2025-08-07` for 1M context window.
 
@@ -180,7 +167,6 @@ All API calls use `httpx` directly against REST endpoints. Anthropic calls inclu
 | HTTP client | httpx ≥ 0.28.1 |
 | Config | python-dotenv ≥ 1.2.2 |
 | Typesetting | LaTeX (XeTeX / Tectonic), EB Garamond |
-| Web | Static HTML (landing page) |
 
 ---
 
@@ -189,14 +175,9 @@ All API calls use `httpx` directly against REST endpoints. Anthropic calls inclu
 ```
 autoShorts/
 ├── chapters/                  Novel chapters (ch_01.md … ch_NN.md)
-├── landing/
-│   └── index.html             Responsive landing page
 ├── typeset/
 │   ├── build_tex.py           Chapters → LaTeX converter
-│   ├── novel.tex              LaTeX template (5.5×8.5 trade paperback)
-│   ├── epub_metadata.yaml     ePub metadata
-│   ├── epub_style.css         ePub styling
-│   └── epub_*.md              Front matter, back cover, colophon
+│   └── novel.tex              LaTeX template (5.5×8.5 trade paperback)
 │
 ├── [Foundation scripts]       seed.py, gen_world.py, gen_characters.py,
 │                              gen_outline.py, gen_outline_part2.py,
@@ -205,9 +186,6 @@ autoShorts/
 ├── [Evaluation scripts]       evaluate.py, adversarial_edit.py,
 │                              compare_chapters.py, reader_panel.py, review.py
 ├── [Revision scripts]         gen_brief.py, gen_revision.py, apply_cuts.py
-├── [Art scripts]              gen_art.py, gen_art_directions.py,
-│                              gen_cover_composite.py, gen_cover_print.py
-├── [Audiobook scripts]        gen_audiobook_script.py, gen_audiobook.py
 ├── [Orchestration]            run_pipeline.py, build_arc_summary.py, build_outline.py
 │
 ├── [Foundation docs]          voice.md, world.md, characters.md,
@@ -217,7 +195,6 @@ autoShorts/
 │                              WORKFLOW.md, program.md
 │
 ├── state.json                 Pipeline state tracker
-├── audiobook_voices.json      Character → voice mapping
 ├── results.tsv                Experiment log
 ├── pyproject.toml             Project config (uv)
 ├── .env.example               API key template

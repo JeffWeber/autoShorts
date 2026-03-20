@@ -11,45 +11,28 @@ then asks an LLM to assess richness and identify gaps.
 Output: bible_score (0-10) to stdout + eval_logs/<timestamp>_bible.json
 """
 import json
-import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
+
+from api_client import call_llm
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-
-JUDGE_MODEL = os.environ.get("AUTONOVEL_JUDGE_MODEL", "claude-opus-4-6")
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
 EVAL_LOG_DIR = BASE_DIR / "eval_logs"
 EVAL_LOG_DIR.mkdir(exist_ok=True)
 
+JUDGE_SYSTEM = (
+    "You are a speculative fiction editor evaluating worldbuilding documents. "
+    "You assess whether a timeline bible contains enough material to support "
+    "a collection of 6-10 short stories set in that world. "
+    "Always respond with valid JSON. No markdown fences, no preamble."
+)
+
 
 def call_judge(prompt, max_tokens=4000):
-    import httpx
-    headers = {
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": JUDGE_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "system": (
-            "You are a speculative fiction editor evaluating worldbuilding documents. "
-            "You assess whether a timeline bible contains enough material to support "
-            "a collection of 6-10 short stories set in that world. "
-            "Always respond with valid JSON. No markdown fences, no preamble."
-        ),
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    resp = httpx.post(f"{API_BASE}/v1/messages", headers=headers, json=payload, timeout=180)
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    return call_llm("judge", prompt, system=JUDGE_SYSTEM, temperature=0.3,
+                     max_tokens=max_tokens, timeout=180)
 
 
 def parse_json_response(text):

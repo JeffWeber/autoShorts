@@ -7,43 +7,20 @@ Usage: python gen_story_characters.py <story_num>
 
 Output: stories/story_NN_characters.md
 """
-import os
 import re
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
+from api_client import call_llm
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-
-WRITER_MODEL = os.environ.get("AUTONOVEL_WRITER_MODEL", "claude-sonnet-4-6")
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
 STORIES_DIR = BASE_DIR / "stories"
 
-
-def call_writer(prompt, max_tokens=4000):
-    import httpx
-    headers = {
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": WRITER_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.7,
-        "system": (
-            "You are creating character sketches for a short story set in a speculative "
-            "fiction timeline. Characters must feel specific and human — not archetypes. "
-            "Keep sketches tight: these are for 1500-3000 word stories, not novels. "
-            "Focus on what makes each character DISTINCT in speech, physicality, and desire."
-        ),
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    resp = httpx.post(f"{API_BASE}/v1/messages", headers=headers, json=payload, timeout=180)
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+SYSTEM_PROMPT = (
+    "You are creating character sketches for a short story set in a speculative "
+    "fiction timeline. Characters must feel specific and human — not archetypes. "
+    "Keep sketches tight: these are for 1500-3000 word stories, not novels. "
+    "Focus on what makes each character DISTINCT in speech, physicality, and desire."
+)
 
 
 def load_file(path):
@@ -139,7 +116,7 @@ RULES:
 """
 
     print(f"Generating characters for Story {story_num}...", file=sys.stderr)
-    result = call_writer(prompt)
+    result = call_llm("writer", prompt, system=SYSTEM_PROMPT, temperature=0.7, max_tokens=4000, timeout=180)
 
     STORIES_DIR.mkdir(exist_ok=True)
     out_path = STORIES_DIR / f"story_{story_num:02d}_characters.md"

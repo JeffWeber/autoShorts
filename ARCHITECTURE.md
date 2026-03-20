@@ -212,8 +212,8 @@ Built into `evaluate.py`:
 ### Revision (3) — *gen_brief.py, gen_revision.py support both modes*
 `gen_brief.py` · `gen_revision.py` · `apply_cuts.py`
 
-### Orchestration & Utilities (4)
-`run_pipeline.py` (novel) · `run_collection_pipeline.py` (collection) · `build_arc_summary.py` · `build_outline.py`
+### Orchestration & Utilities (5)
+`run_pipeline.py` (novel) · `run_collection_pipeline.py` (collection) · `build_arc_summary.py` · `build_outline.py` · `api_client.py` (shared LLM client)
 
 ### Typesetting (2)
 `typeset/build_tex.py` (novel) · `typeset/build_collection_tex.py` (collection)
@@ -225,8 +225,9 @@ Built into `evaluate.py`:
 | Service | Purpose | Models / Endpoints | Env Var |
 |---------|---------|--------------------|---------|
 | **Anthropic** | Writing, evaluation, review | Sonnet 4.6 (writer), Opus 4.6 (judge/review) | `ANTHROPIC_API_KEY` |
+| **OpenRouter** | Alternative provider (any model) | OpenAI-compatible chat completions | `OPENROUTER_API_KEY` |
 
-All API calls use `httpx` directly against REST endpoints. Anthropic calls include `anthropic-beta: context-1m-2025-08-07` for 1M context window.
+All API calls go through `api_client.py`, which supports both Anthropic (Messages API) and OpenRouter (Chat Completions API). Set `AUTONOVEL_API_PROVIDER=anthropic` or `openrouter` in `.env`. Three model roles — writer, judge, review — are configured via `AUTONOVEL_WRITER_MODEL`, `AUTONOVEL_JUDGE_MODEL`, `AUTONOVEL_REVIEW_MODEL`.
 
 ---
 

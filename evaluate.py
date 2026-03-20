@@ -15,28 +15,16 @@ to tune what "good" means. The agent treats it as a black box.
 
 import argparse
 import json
-import os
 import sys
 import glob
 import re
 from datetime import datetime
 from pathlib import Path
 
+from api_client import call_llm
+
 # --- Configuration ---
 BASE_DIR = Path(__file__).parent
-
-# Load .env file if present
-from dotenv import load_dotenv
-load_dotenv(BASE_DIR / ".env")
-
-# Judge uses Opus 4.6 (harsh, critical). Writer uses Sonnet 4.6 (fast, long context).
-# Intentionally different to avoid self-congratulation.
-JUDGE_MODEL = os.environ.get("AUTONOVEL_JUDGE_MODEL", "claude-opus-4-6")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE_URL = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
-
-# Beta header to unlock 1M context window on both Opus 4.6 and Sonnet 4.6
-ANTHROPIC_BETA = "context-1m-2025-08-07"
 CHAPTERS_DIR = BASE_DIR / "chapters"
 STORIES_DIR = BASE_DIR / "stories"
 EVAL_LOG_DIR = BASE_DIR / "eval_logs"
@@ -273,36 +261,15 @@ def load_all_chapters():
     return chapters
 
 
+JUDGE_SYSTEM = ("You are a literary critic and novel editor. "
+                "You evaluate fiction with precision. Always respond with valid JSON. "
+                "No markdown fences, no preamble -- just the JSON object.")
+
+
 def call_judge(prompt, max_tokens=2000):
-    """Call the Anthropic judge LLM and return its response text."""
-    import httpx
-
-    headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": ANTHROPIC_BETA,
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": JUDGE_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "system": "You are a literary critic and novel editor. "
-                  "You evaluate fiction with precision. Always respond with valid JSON. "
-                  "No markdown fences, no preamble -- just the JSON object.",
-        "messages": [
-            {"role": "user", "content": prompt},
-        ],
-    }
-
-    resp = httpx.post(
-        f"{API_BASE_URL}/v1/messages",
-        headers=headers,
-        json=payload,
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    """Call the judge LLM and return its response text."""
+    return call_llm("judge", prompt, system=JUDGE_SYSTEM, temperature=0.3,
+                     max_tokens=max_tokens, timeout=180)
 
 
 def parse_json_response(text):

@@ -32,11 +32,10 @@ python reader_panel.py --collection
 
 ## Code Conventions
 
-- All API calls use `httpx` directly against Anthropic REST endpoints (no SDK wrapper)
-- Writer model: Sonnet 4.6 (T=0.8) — creative generation
-- Judge model: Opus 4.6 (T=0.3) — evaluation and review (different model prevents self-congratulation)
-- Config via `.env` + `python-dotenv`: `ANTHROPIC_API_KEY`, `AUTONOVEL_WRITER_MODEL`, `AUTONOVEL_JUDGE_MODEL`, `AUTONOVEL_API_BASE_URL`
-- Include `anthropic-beta: context-1m-2025-08-07` header for long-context calls
+- All API calls go through `api_client.py` — shared module supporting Anthropic and OpenRouter providers
+- Three model roles configured in `.env`: writer (creative), judge (evaluation), review (literary analysis)
+- Provider selection: `AUTONOVEL_API_PROVIDER=anthropic` or `openrouter` in `.env`
+- Config via `.env` + `python-dotenv`: `AUTONOVEL_API_PROVIDER`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `AUTONOVEL_WRITER_MODEL`, `AUTONOVEL_JUDGE_MODEL`, `AUTONOVEL_REVIEW_MODEL`
 - State tracked in `state.json`, experiment log in `results.tsv`
 
 ## Key Directories

@@ -8,37 +8,11 @@ Usage: python gen_collection_plan.py [path/to/bible.md]
 
 Output: collection_plan.md
 """
-import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
+from api_client import call_llm
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-
-WRITER_MODEL = os.environ.get("AUTONOVEL_WRITER_MODEL", "claude-sonnet-4-6")
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
-
-
-def call_writer(prompt, system, max_tokens=16000, temperature=0.7):
-    import httpx
-    headers = {
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "context-1m-2025-08-07",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": WRITER_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "system": system,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    resp = httpx.post(f"{API_BASE}/v1/messages", headers=headers, json=payload, timeout=600)
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
 
 
 def load_file(path):
@@ -167,7 +141,7 @@ For EACH selected story:
 """
 
     print("Mining timeline for story moments...", file=sys.stderr)
-    result = call_writer(prompt, system_prompt)
+    result = call_llm("writer", prompt, system=system_prompt, temperature=0.7, max_tokens=16000, timeout=600)
 
     # Save
     out_path = BASE_DIR / "collection_plan.md"

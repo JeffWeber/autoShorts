@@ -11,23 +11,16 @@ Usage:
   python review.py --output reviews.md  # Also save human-readable copy
   python review.py --parse            # Parse last review into actionable items
 """
-import os
 import sys
 import json
 import re
 import argparse
 from pathlib import Path
 from datetime import datetime
-from dotenv import load_dotenv
+
+from api_client import call_llm
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env", override=True)
-
-# Use Opus for reviews — it's the best at literary analysis
-REVIEW_MODEL = os.environ.get("AUTONOVEL_REVIEW_MODEL", "claude-opus-4-6")
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
-
 CHAPTERS_DIR = BASE_DIR / "chapters"
 STORIES_DIR = BASE_DIR / "stories"
 LOGS_DIR = BASE_DIR / "edit_logs"
@@ -46,27 +39,9 @@ In the professor review, give specific, actionable suggestions. Consider: story 
 
 
 def call_opus(prompt, max_tokens=8000):
-    """Call Opus with the full manuscript."""
-    import httpx
-    headers = {
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "context-1m-2025-08-07",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": REVIEW_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    print(f"Sending to {REVIEW_MODEL} ({len(prompt):,} chars)...", file=sys.stderr)
-    resp = httpx.post(
-        f"{API_BASE}/v1/messages",
-        headers=headers, json=payload, timeout=600,
-    )
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    """Call the review model with the full manuscript."""
+    print(f"Sending review ({len(prompt):,} chars)...", file=sys.stderr)
+    return call_llm("review", prompt, temperature=0.3, max_tokens=max_tokens, timeout=600)
 
 
 def get_title():
@@ -310,10 +285,6 @@ def main():
     parser.add_argument("--collection", action="store_true", help="Review short story collection")
     
     args = parser.parse_args()
-    
-    if not API_KEY:
-        print("ERROR: ANTHROPIC_API_KEY not set in .env", file=sys.stderr)
-        sys.exit(1)
     
     if args.parse:
         cmd_parse(args)

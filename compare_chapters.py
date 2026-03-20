@@ -7,45 +7,28 @@ Produces a true rank order from round-robin tournament.
 Usage: python compare_chapters.py          # full tournament
        python compare_chapters.py 1 10     # single matchup
 """
-import os
 import sys
 import json
 import re
 import random
 from pathlib import Path
 from datetime import datetime
-from dotenv import load_dotenv
+
+from api_client import call_llm
 
 BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-
-JUDGE_MODEL = os.environ.get("AUTONOVEL_JUDGE_MODEL", "claude-opus-4-6")
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
 CHAPTERS_DIR = BASE_DIR / "chapters"
 
+JUDGE_SYSTEM = (
+    "You are a literary editor comparing two chapters of the same novel. "
+    "You pick the better one. You are not allowed to call it a tie. "
+    "You quote specific passages to justify your choice. "
+    "Respond with valid JSON only."
+)
+
 def call_judge(prompt, max_tokens=4000):
-    import httpx
-    headers = {
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": JUDGE_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.2,
-        "system": (
-            "You are a literary editor comparing two chapters of the same novel. "
-            "You pick the better one. You are not allowed to call it a tie. "
-            "You quote specific passages to justify your choice. "
-            "Respond with valid JSON only."
-        ),
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    resp = httpx.post(f"{API_BASE}/v1/messages", headers=headers, json=payload, timeout=300)
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    return call_llm("judge", prompt, system=JUDGE_SYSTEM, temperature=0.2,
+                     max_tokens=max_tokens, timeout=300)
 
 def parse_json(text):
     text = text.strip()

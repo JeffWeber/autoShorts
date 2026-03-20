@@ -20,6 +20,7 @@ JUDGE_MODEL = os.environ.get("AUTONOVEL_JUDGE_MODEL", "claude-opus-4-6")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
 CHAPTERS_DIR = BASE_DIR / "chapters"
+STORIES_DIR = BASE_DIR / "stories"
 EDIT_LOG_DIR = BASE_DIR / "edit_logs"
 EDIT_LOG_DIR.mkdir(exist_ok=True)
 
@@ -134,57 +135,105 @@ def edit_chapter(ch_num):
     ch_path = CHAPTERS_DIR / f"ch_{ch_num:02d}.md"
     text = ch_path.read_text()
     word_count = len(text.split())
-    
+
     prompt = EDIT_PROMPT.format(chapter_text=text, word_count=word_count)
     raw = call_judge(prompt)
     result = parse_json(raw)
-    
+
     # Save log
     log_path = EDIT_LOG_DIR / f"ch{ch_num:02d}_cuts.json"
     with open(log_path, "w") as f:
         json.dump(result, f, indent=2)
-    
+
     return result, word_count
+
+
+def edit_story(story_num):
+    """Edit a short story (collection mode)."""
+    st_path = STORIES_DIR / f"story_{story_num:02d}.md"
+    if not st_path.exists():
+        raise FileNotFoundError(f"Story file not found: {st_path}")
+    text = st_path.read_text()
+    word_count = len(text.split())
+
+    # Use a tighter prompt for short stories (5-10 cuts instead of 10-20)
+    prompt = EDIT_PROMPT.format(chapter_text=text, word_count=word_count)
+    prompt = prompt.replace("10-20 specific passages", "5-10 specific passages")
+    raw = call_judge(prompt)
+    result = parse_json(raw)
+
+    log_path = EDIT_LOG_DIR / f"story{story_num:02d}_cuts.json"
+    with open(log_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    return result, word_count
+
+
+def print_edit_results(result, wc):
+    cuts = result.get("cuts", [])
+    cuttable = result.get("total_cuttable_words", 0)
+    fat_pct = result.get("overall_fat_percentage", 0)
+    verdict = result.get("one_sentence_verdict", "")
+
+    type_counts = {}
+    for c in cuts:
+        t = c.get("type", "?")
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    print(f"  Words: {wc}")
+    print(f"  Cuts found: {len(cuts)}")
+    print(f"  Cuttable words: ~{cuttable} ({fat_pct}% fat)")
+    print(f"  By type: {type_counts}")
+    print(f"  Verdict: {verdict}")
+    print(f"  Tightest: {result.get('tightest_passage', '')[:100]}...")
+    print(f"  Loosest:  {result.get('loosest_passage', '')[:100]}...")
+
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: python adversarial_edit.py <chapter_num|all>")
+        print("       python adversarial_edit.py story <story_num|all>")
         sys.exit(1)
-    
+
+    # Story mode
+    if sys.argv[1] == "story":
+        if len(sys.argv) < 3:
+            print("Usage: python adversarial_edit.py story <story_num|all>")
+            sys.exit(1)
+        if sys.argv[2] == "all":
+            story_files = sorted(STORIES_DIR.glob("story_*.md"))
+            story_nums = [int(re.search(r'story_(\d+)', f.name).group(1))
+                          for f in story_files if "_characters" not in f.name]
+        else:
+            story_nums = [int(sys.argv[2])]
+
+        for st in story_nums:
+            print(f"\n{'='*50}")
+            print(f"EDITING STORY {st}")
+            print(f"{'='*50}")
+            try:
+                result, wc = edit_story(st)
+                print_edit_results(result, wc)
+            except Exception as e:
+                print(f"  ERROR: {e}")
+        return
+
+    # Chapter mode (original)
     if sys.argv[1] == "all":
         chapters = list(range(1, 25))
     else:
         chapters = [int(sys.argv[1])]
-    
+
     for ch in chapters:
         print(f"\n{'='*50}")
         print(f"EDITING CH {ch}")
         print(f"{'='*50}")
-        
+
         try:
             result, wc = edit_chapter(ch)
+            print_edit_results(result, wc)
         except Exception as e:
             print(f"  ERROR: {e}")
-            continue
-        
-        cuts = result.get("cuts", [])
-        cuttable = result.get("total_cuttable_words", 0)
-        fat_pct = result.get("overall_fat_percentage", 0)
-        verdict = result.get("one_sentence_verdict", "")
-        
-        # Count by type
-        type_counts = {}
-        for c in cuts:
-            t = c.get("type", "?")
-            type_counts[t] = type_counts.get(t, 0) + 1
-        
-        print(f"  Words: {wc}")
-        print(f"  Cuts found: {len(cuts)}")
-        print(f"  Cuttable words: ~{cuttable} ({fat_pct}% fat)")
-        print(f"  By type: {type_counts}")
-        print(f"  Verdict: {verdict}")
-        print(f"  Tightest: {result.get('tightest_passage', '')[:100]}...")
-        print(f"  Loosest:  {result.get('loosest_passage', '')[:100]}...")
 
 if __name__ == "__main__":
     main()

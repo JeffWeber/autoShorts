@@ -17,6 +17,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 CHAPTERS_DIR = BASE_DIR / "chapters"
+STORIES_DIR = BASE_DIR / "stories"
 EDIT_LOGS_DIR = BASE_DIR / "edit_logs"
 EVAL_LOGS_DIR = BASE_DIR / "eval_logs"
 BRIEFS_DIR = BASE_DIR / "briefs"
@@ -785,6 +786,160 @@ def build_auto_brief() -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
+# story brief (short story collection mode)
+# ---------------------------------------------------------------------------
+
+def story_path(st: int) -> Path:
+    return STORIES_DIR / f"story_{st:02d}.md"
+
+
+def story_text(st: int) -> str:
+    p = story_path(st)
+    if not p.exists():
+        sys.exit(f"ERROR: story file not found: {p}")
+    return p.read_text(encoding="utf-8")
+
+
+def latest_story_eval(st: int) -> Path | None:
+    if not EVAL_LOGS_DIR.exists():
+        return None
+    pattern = f"*_story{st:02d}.json"
+    matches = sorted(EVAL_LOGS_DIR.glob(pattern))
+    return matches[-1] if matches else None
+
+
+def load_story_cuts(st: int) -> dict | None:
+    p = EDIT_LOGS_DIR / f"story{st:02d}_cuts.json"
+    if not p.exists():
+        return None
+    return load_json(p)
+
+
+def build_story_eval_brief(st: int) -> str:
+    """Build a revision brief for a short story from eval + cuts data."""
+    st_eval_path = latest_story_eval(st)
+    if st_eval_path is None:
+        sys.exit(f"ERROR: no eval logs found for story {st}")
+
+    text = story_text(st)
+    title = chapter_title(text)  # reuse — works on any md with a heading
+    wc = word_count(text)
+    voice_rules = extract_voice_rules()
+
+    problem_parts: list[str] = []
+    keep_parts: list[str] = []
+    change_parts: list[str] = []
+    change_num = 1
+
+    st_eval = load_json(st_eval_path)
+
+    overall = st_eval.get("overall_score", "?")
+    weakest_dim = st_eval.get("weakest_dimension", "unknown")
+    problem_parts.append(
+        f"Story eval score: **{overall}/10**. "
+        f"Weakest dimension: **{weakest_dim}**."
+    )
+
+    # Collect weakest moments from story-specific dimensions
+    dim_keys = [
+        "voice_adherence", "experiential_density", "character_specificity",
+        "prose_quality", "canon_compliance", "world_integration",
+        "completeness", "engagement",
+    ]
+    for dk in dim_keys:
+        dim = st_eval.get(dk)
+        if not dim or not isinstance(dim, dict):
+            continue
+        score = dim.get("score", "?")
+        weakest = dim.get("weakest_moment", dim.get("weakest_sentence", ""))
+        fix = dim.get("fix", "")
+        if score != "?" and float(score) <= 7 and weakest:
+            problem_parts.append(
+                f"**{dk.replace('_', ' ').title()}** ({score}/10): {weakest}"
+            )
+            if fix:
+                change_parts.append(f"{change_num}. [{dk}] {fix}")
+                change_num += 1
+
+    # Top 3 revisions
+    for rev in st_eval.get("top_3_revisions", []):
+        change_parts.append(f"{change_num}. {rev}")
+        change_num += 1
+
+    # AI patterns
+    ai_patterns = st_eval.get("ai_patterns_detected", [])
+    if ai_patterns:
+        problem_parts.append("**AI patterns detected:**")
+        for pat in ai_patterns:
+            problem_parts.append(f"- {pat}")
+
+    # Strongest sentences
+    strongest = st_eval.get("three_strongest_sentences", [])
+    if strongest:
+        keep_parts.append("Strongest sentences (eval):")
+        for s in strongest:
+            keep_parts.append(f'- "{s}"')
+
+    # Weakest sentences
+    weakest_sents = st_eval.get("three_weakest_sentences", [])
+    if weakest_sents:
+        problem_parts.append("**Weakest sentences:**")
+        for s in weakest_sents:
+            problem_parts.append(f'- "{s}"')
+
+    # Cuts data
+    cuts_data = load_story_cuts(st)
+    if cuts_data:
+        tightest = cuts_data.get("tightest_passage", "")
+        if tightest:
+            keep_parts.append(f'\nTightest passage (adversarial edit):\n> {tightest}')
+
+        priority_cuts = [c for c in cuts_data.get("cuts", [])
+                         if c.get("type") in ("REDUNDANT", "OVER-EXPLAIN")]
+        for c in priority_cuts[:3]:
+            quote = c.get("quote", "")[:150]
+            reason = c.get("reason", "")
+            action = c.get("action", "CUT")
+            rewrite = c.get("rewrite")
+            entry = f'{change_num}. `"{quote}..."` — {reason}'
+            if action == "REWRITE" and rewrite:
+                entry += f'\n   → Rewrite as: "{rewrite}"'
+            elif action == "CUT":
+                entry += "\n   → Cut entirely"
+            change_parts.append(entry)
+            change_num += 1
+
+    if not keep_parts:
+        keep_parts.append("(Review story for strongest passages before revising.)")
+    if not change_parts:
+        change_parts.append("(No specific changes auto-detected. Manual review recommended.)")
+
+    # Determine type
+    if overall != "?" and float(overall) <= 5:
+        brief_type = "REWRITE"
+    elif overall != "?" and float(overall) <= 7:
+        brief_type = "FIX"
+    else:
+        brief_type = "POLISH"
+
+    target_note = f"~{wc} words (current: {wc}; adjust based on revision scope)"
+
+    brief = f"# Revision Brief: Story {st} — {title} ({brief_type})\n\n"
+    brief += "## PROBLEM\n"
+    brief += "\n\n".join(problem_parts) + "\n\n"
+    brief += "## WHAT TO KEEP\n"
+    brief += "\n".join(keep_parts) + "\n\n"
+    brief += "## WHAT TO CHANGE\n"
+    brief += "\n".join(change_parts) + "\n\n"
+    brief += "## VOICE RULES\n"
+    brief += "\n".join(f"- {r}" for r in voice_rules) + "\n\n"
+    brief += "## TARGET\n"
+    brief += target_note + "\n"
+
+    return brief
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -800,6 +955,8 @@ def main():
                         help="Generate brief from adversarial cuts for chapter CH")
     parser.add_argument("--auto", action="store_true",
                         help="Auto-detect weakest chapter and generate combined brief")
+    parser.add_argument("--story-eval", type=int, metavar="ST",
+                        help="Generate brief from eval for short story ST")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print brief to stdout without saving")
 
@@ -811,29 +968,39 @@ def main():
         args.eval is not None,
         args.cuts is not None,
         args.auto,
+        args.story_eval is not None,
     ])
     if modes == 0:
         parser.print_help()
         sys.exit(1)
     if modes > 1:
-        sys.exit("ERROR: specify exactly one of --panel, --eval, --cuts, --auto")
+        sys.exit("ERROR: specify exactly one mode")
 
     # Generate
-    if args.panel is not None:
+    if args.story_eval is not None:
+        st = args.story_eval
+        brief_text = build_story_eval_brief(st)
+        suffix = "eval"
+        out_name = f"story{st:02d}_{suffix}.md"
+    elif args.panel is not None:
         ch = args.panel
         brief_text = build_panel_brief(ch)
         suffix = "panel"
+        out_name = f"ch{ch:02d}_{suffix}.md"
     elif args.eval is not None:
         ch = args.eval
         brief_text = build_eval_brief(ch)
         suffix = "eval"
+        out_name = f"ch{ch:02d}_{suffix}.md"
     elif args.cuts is not None:
         ch = args.cuts
         brief_text = build_cuts_brief(ch)
         suffix = "cuts"
+        out_name = f"ch{ch:02d}_{suffix}.md"
     else:  # --auto
         ch, brief_text = build_auto_brief()
         suffix = "auto"
+        out_name = f"ch{ch:02d}_{suffix}.md"
 
     if args.dry_run:
         print(brief_text)
@@ -841,10 +1008,9 @@ def main():
 
     # Save
     BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = BRIEFS_DIR / f"ch{ch:02d}_{suffix}.md"
+    out_path = BRIEFS_DIR / out_name
     out_path.write_text(brief_text, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)
-    print(f"Chapter: {ch}", file=sys.stderr)
     print(f"Type: {suffix}", file=sys.stderr)
     print(f"Brief length: {word_count(brief_text)} words", file=sys.stderr)
 

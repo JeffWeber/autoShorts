@@ -29,9 +29,18 @@ API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 API_BASE = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.com")
 
 CHAPTERS_DIR = BASE_DIR / "chapters"
+STORIES_DIR = BASE_DIR / "stories"
 LOGS_DIR = BASE_DIR / "edit_logs"
 
 REVIEW_PROMPT = """Read the below novel, "{title}". Review it first as a literary critic (like a newspaper book review) and then as a professor of fiction. In the later review, give specific, actionable suggestions for any defects you find. Be fair but honest. You don't *have* to find defects.
+
+{manuscript}"""
+
+COLLECTION_REVIEW_PROMPT = """Read the below short story collection, "{title}", set in a divergent timeline. Review it first as a literary critic (like a newspaper review of a short story collection) and then as a professor of fiction specializing in speculative short fiction.
+
+In the critic review, assess: Does this collection make the reader understand and FEEL what it's like to live in this timeline? Does it work as a unified whole?
+
+In the professor review, give specific, actionable suggestions. Consider: story ordering, redundancy between stories, the weakest story, missing perspectives, whether each story earns its place. Reference stories by number. Be fair but honest.
 
 {manuscript}"""
 
@@ -205,13 +214,35 @@ def should_stop(parsed_review):
     return False, f"{major} major items, {total - qualified} unqualified"
 
 
+def build_collection():
+    """Concatenate all stories into a single text for review."""
+    story_files = sorted(f for f in STORIES_DIR.glob("story_*.md")
+                         if "_characters" not in f.name)
+    if not story_files:
+        print("ERROR: No stories found.", file=sys.stderr)
+        sys.exit(1)
+
+    parts = []
+    for st in story_files:
+        parts.append(st.read_text())
+
+    manuscript = "\n\n---\n\n".join(parts)
+    wc = len(manuscript.split())
+    print(f"Collection: {len(story_files)} stories, {wc:,} words", file=sys.stderr)
+    return manuscript
+
+
 def cmd_review(args):
     """Generate a review."""
-    title = get_title()
-    manuscript = build_manuscript()
-    
-    prompt = REVIEW_PROMPT.format(title=title, manuscript=manuscript)
-    
+    if args.collection:
+        title = "Short Story Collection"
+        manuscript = build_collection()
+        prompt = COLLECTION_REVIEW_PROMPT.format(title=title, manuscript=manuscript)
+    else:
+        title = get_title()
+        manuscript = build_manuscript()
+        prompt = REVIEW_PROMPT.format(title=title, manuscript=manuscript)
+
     review_text = call_opus(prompt)
     
     # Save raw review
@@ -276,6 +307,7 @@ def main():
     parser = argparse.ArgumentParser(description="Deep manuscript review via Opus")
     parser.add_argument("--output", "-o", default=None, help="Save human-readable review to file")
     parser.add_argument("--parse", action="store_true", help="Parse most recent review")
+    parser.add_argument("--collection", action="store_true", help="Review short story collection")
     
     args = parser.parse_args()
     

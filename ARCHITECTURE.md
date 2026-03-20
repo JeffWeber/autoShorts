@@ -1,8 +1,12 @@
 # Architecture
 
-**autonovel** is an autonomous pipeline that generates complete novels from a seed concept. Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch), it applies a modify → evaluate → keep/discard loop to fiction writing, producing print-ready PDFs.
+**autonovel** is an autonomous pipeline that generates complete novels from a seed concept, and **short story collections** from pre-built divergent timeline bibles. Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch), it applies a modify → evaluate → keep/discard loop to fiction writing, producing print-ready PDFs.
 
-First production: *The Second Son of the House of Bells* — 19 chapters, 79,456 words, 6 revision cycles.
+Two modes of operation:
+- **Novel mode** — generates a full novel (~80K words, 22-26 chapters) from a seed concept
+- **Collection mode** — generates 6-10 standalone short stories (1500-3000 words each) set within a pre-built divergent timeline
+
+First novel production: *The Second Son of the House of Bells* — 19 chapters, 79,456 words, 6 revision cycles.
 
 ---
 
@@ -21,9 +25,33 @@ Cross-cutting: canon.md   ← WHAT IS TRUE (hard facts, cross-referenced, 400+ e
 
 Supporting documents: `MYSTERY.md` (central secret, author-only), `program.md` (agent instructions per phase).
 
+### Collection Model
+
+The collection pipeline receives a pre-built world (timeline bible) rather than generating one. Stories are standalone but share a timeline, requiring consistency without continuity.
+
+```
+Layer 5:  voice.md                ← HOW we write (calibrated from bible tone + user style)
+Layer 4:  References/bible.md     ← WHAT EXISTS (pre-built divergent timeline — input, not generated)
+Layer 3:  stories/*_characters.md ← WHO ACTS (1-3 per story, lighter than novel depth)
+Layer 2:  collection_plan.md      ← WHICH WINDOWS to open (8 story briefs mined from timeline)
+Layer 1:  stories/story_NN.md     ← THE ACTUAL PROSE
+Cross-cutting: canon.md           ← WHAT IS TRUE (extracted from bible, 80-150 entries)
+```
+
+| Aspect | Novel Pipeline | Collection Pipeline |
+|--------|---------------|-------------------|
+| World | Generated (`gen_world.py`) | Pre-built (`References/bible.md`) |
+| Structure | 22-26 sequential chapters | 6-10 standalone stories |
+| Words/piece | 3000-3500 per chapter | 1500-3000 per story |
+| Characters | Persistent cast, deep arcs | 1-3 per story, lighter sketches |
+| Continuity | Prev/next chapter context | Shared timeline only |
+| Revision | 3-6 cycles, multi-chapter cascading | 1 pass per story + 1 collection-level pass |
+
 ---
 
 ## Pipeline Phases
+
+### Novel Mode
 
 ```
 seed.txt ──► PHASE 1: FOUNDATION ──► PHASE 2: DRAFTING ──► PHASE 3: REVISION ──► PHASE 4: EXPORT
@@ -81,13 +109,60 @@ Batch mode: `run_drafts.py`
 
 Supporting tools: `compare_chapters.py` (Elo tournament ranking)
 
-### Phase 4 — Export (~30 min)
+### Novel Phase 4 — Export (~30 min)
 
 | Output | Scripts |
 |--------|---------|
 | Arc summary | `build_arc_summary.py` |
 | Outline rebuild | `build_outline.py` |
 | PDF (trade paperback) | `typeset/build_tex.py` → `tectonic novel.tex` |
+
+### Collection Mode
+
+```
+bible.md ──► PHASE 1: INTAKE ──► PHASE 2: PLAN ──► PHASE 3: DRAFTING ──► PHASE 4: POLISH+EXPORT
+              (validate bible,     (mine moments,     (per-story:           (collection panel,
+               extract canon,       select 8 stories,   draft, evaluate,      Opus review,
+               calibrate voice)     generate briefs)    adversarial edit,     typeset)
+                                                        revise if <6.5)
+```
+
+Orchestrated by `run_collection_pipeline.py`. State tracked in `state.json`.
+
+#### Phase 1 — Intake (~15-30 min)
+
+| Step | Script | Output | Gate |
+|------|--------|--------|------|
+| Validate bible | `validate_bible.py` | `eval_logs/bible_validation.json` | `bible_score > 6.0` |
+| Extract canon | `gen_canon_from_bible.py` | `canon.md` | 50+ entries |
+| Voice calibration | manual / `voice_fingerprint.py` | `voice.md` | — |
+
+#### Phase 2 — Collection Plan (~30-60 min)
+
+`gen_collection_plan.py` mines the bible in two phases:
+1. **Mine** 15-20 candidate moments across eras
+2. **Select** 8 that maximize coverage, variety, and tonal range
+
+Each brief includes: era, year, location, POV character, dramatic question, opening/closing image, 3-5 beats, sensory anchors, required canon facts, emotional register, target word count, thematic connections.
+
+Gate: `collection_plan_score > 7.0` (max 5 iterations).
+
+#### Phase 3 — Drafting + Revision (~4-8 hours)
+
+Per story:
+1. `gen_story_characters.py N` → `stories/story_NN_characters.md`
+2. `draft_story.py N` → `stories/story_NN.md` (Sonnet 4.6, T=0.8, 22 anti-pattern rules)
+3. `evaluate.py --story=N` → keep if score > 6.5, else retry (max 3 attempts)
+4. `adversarial_edit.py story N` → 5-10 cuts
+5. `gen_brief.py --story-eval N` + `gen_revision.py story N brief.md` if score < 6.5
+
+#### Phase 4 — Polish + Export (~1-2 hours)
+
+1. `reader_panel.py --collection` → 3-persona anthology evaluation
+2. `review.py --collection` → Opus dual-persona collection review
+3. Targeted revision of weakest story
+4. `evaluate.py --collection` → final collection score
+5. `typeset/build_collection_tex.py` → LaTeX export
 
 ---
 
@@ -106,33 +181,42 @@ Built into `evaluate.py`:
 
 ### LLM Judge (Opus, T=0.3)
 
-Scores across dimensions: prose quality, voice adherence, character distinctiveness, beat coverage, theme coherence, pacing, dialogue, emotional authenticity, structural integrity.
+**Novel mode** scores: prose quality, voice adherence, character distinctiveness, beat coverage, theme coherence, pacing, dialogue, emotional authenticity, structural integrity.
+
+**Story mode** scores 8 dimensions: voice adherence, experiential density, character specificity, prose quality, canon compliance, world integration, completeness, engagement.
+
+**Collection mode** scores 7 dimensions: coverage, variety, coherence, world teaching, redundancy, ordering, overall quality.
 
 ### Reader Panel (`reader_panel.py`)
 
-4 personas each answer 10 questions (momentum loss, earned ending, cut candidates, missing scenes, thinnest character, best/worst scene, would recommend, haunts you, next book). Consensus (3-4 agreement) becomes revision targets.
+**Novel mode**: 4 personas (editor, genre reader, writer, first reader) each answer 10 questions. Consensus (3-4 agreement) becomes revision targets.
+
+**Collection mode**: 3 personas (anthology editor, SF reader, general reader) answer 8 questions: weakest story, strongest story, missing perspective, redundant pair, ordering, world understanding, would recommend, haunts you.
 
 ---
 
-## Script Inventory (21 Python files)
+## Script Inventory (27 Python files)
 
-### Foundation (7)
+### Novel Foundation (7)
 `seed.py` · `gen_world.py` · `gen_characters.py` · `gen_outline.py` · `gen_outline_part2.py` · `gen_canon.py` · `voice_fingerprint.py`
 
-### Drafting (2)
-`draft_chapter.py` · `run_drafts.py`
+### Collection Intake & Planning (4) — *new*
+`validate_bible.py` · `gen_canon_from_bible.py` · `gen_collection_plan.py` · `gen_story_characters.py`
 
-### Evaluation (5)
+### Drafting (3)
+`draft_chapter.py` · `run_drafts.py` · `draft_story.py`
+
+### Evaluation (5) — *evaluate.py, reader_panel.py, review.py support both modes*
 `evaluate.py` · `adversarial_edit.py` · `compare_chapters.py` · `reader_panel.py` · `review.py`
 
-### Revision (3)
+### Revision (3) — *gen_brief.py, gen_revision.py support both modes*
 `gen_brief.py` · `gen_revision.py` · `apply_cuts.py`
 
-### Orchestration & Utilities (3)
-`run_pipeline.py` · `build_arc_summary.py` · `build_outline.py`
+### Orchestration & Utilities (4)
+`run_pipeline.py` (novel) · `run_collection_pipeline.py` (collection) · `build_arc_summary.py` · `build_outline.py`
 
-### Typesetting (1)
-`typeset/build_tex.py`
+### Typesetting (2)
+`typeset/build_tex.py` (novel) · `typeset/build_collection_tex.py` (collection)
 
 ---
 
@@ -150,7 +234,7 @@ All API calls use `httpx` directly against REST endpoints. Anthropic calls inclu
 
 | File / Directory | Purpose |
 |-----------------|---------|
-| `state.json` | Pipeline progress: phase, iteration, scores, chapters drafted, revision cycle, debts |
+| `state.json` | Pipeline progress: phase, iteration, scores, chapters/stories drafted, revision cycle |
 | `results.tsv` | Experiment log — every keep/discard decision with commit, score, word count |
 | `eval_logs/*.json` | Per-evaluation results (mechanical + LLM scores, dimension breakdown) |
 | `edit_logs/*.json` | Adversarial cuts, reader panel responses, Elo tournament results, review metadata |
@@ -175,27 +259,39 @@ All API calls use `httpx` directly against REST endpoints. Anthropic calls inclu
 ```
 autoShorts/
 ├── chapters/                  Novel chapters (ch_01.md … ch_NN.md)
+├── stories/                   Collection stories (story_01.md … story_10.md)
+│   └── story_NN_characters.md Per-story character sketches
+├── References/
+│   └── bible.md               Pre-built divergent timeline (collection input)
 ├── typeset/
-│   ├── build_tex.py           Chapters → LaTeX converter
-│   └── novel.tex              LaTeX template (5.5×8.5 trade paperback)
+│   ├── build_tex.py           Novel chapters → LaTeX converter
+│   └── build_collection_tex.py Collection stories → LaTeX converter
 │
-├── [Foundation scripts]       seed.py, gen_world.py, gen_characters.py,
+├── [Novel foundation]         seed.py, gen_world.py, gen_characters.py,
 │                              gen_outline.py, gen_outline_part2.py,
 │                              gen_canon.py, voice_fingerprint.py
-├── [Drafting scripts]         draft_chapter.py, run_drafts.py
-├── [Evaluation scripts]       evaluate.py, adversarial_edit.py,
+├── [Collection intake/plan]   validate_bible.py, gen_canon_from_bible.py,
+│                              gen_collection_plan.py, gen_story_characters.py
+├── [Drafting]                 draft_chapter.py, run_drafts.py, draft_story.py
+├── [Evaluation]               evaluate.py, adversarial_edit.py,
 │                              compare_chapters.py, reader_panel.py, review.py
-├── [Revision scripts]         gen_brief.py, gen_revision.py, apply_cuts.py
-├── [Orchestration]            run_pipeline.py, build_arc_summary.py, build_outline.py
+├── [Revision]                 gen_brief.py, gen_revision.py, apply_cuts.py
+├── [Orchestration]            run_pipeline.py (novel),
+│                              run_collection_pipeline.py (collection),
+│                              build_arc_summary.py, build_outline.py
 │
 ├── [Foundation docs]          voice.md, world.md, characters.md,
 │                              outline.md, canon.md, MYSTERY.md
+├── [Collection docs]          collection_plan.md, canon.md (from bible)
 ├── [Framework docs]           README.md, PIPELINE.md, CRAFT.md,
 │                              ANTI-SLOP.md, ANTI-PATTERNS.md,
 │                              WORKFLOW.md, program.md
 │
 ├── state.json                 Pipeline state tracker
 ├── results.tsv                Experiment log
+├── eval_logs/                 Per-evaluation results
+├── edit_logs/                 Adversarial cuts, panel results, review metadata
+├── briefs/                    Revision briefs per chapter/story
 ├── pyproject.toml             Project config (uv)
 ├── .env.example               API key template
 └── main.py                    Entry point

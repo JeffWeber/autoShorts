@@ -38,6 +38,7 @@ API_BASE_URL = os.environ.get("AUTONOVEL_API_BASE_URL", "https://api.anthropic.c
 # Beta header to unlock 1M context window on both Opus 4.6 and Sonnet 4.6
 ANTHROPIC_BETA = "context-1m-2025-08-07"
 CHAPTERS_DIR = BASE_DIR / "chapters"
+STORIES_DIR = BASE_DIR / "stories"
 EVAL_LOG_DIR = BASE_DIR / "eval_logs"
 EVAL_LOG_DIR.mkdir(exist_ok=True)
 
@@ -787,10 +788,246 @@ def evaluate_full():
     return parse_json_response(raw)
 
 
+# --- Story Evaluation (short story collection mode) ---
+
+STORY_PROMPT = """Evaluate this short story set in a divergent timeline.
+
+SCORING CALIBRATION:
+  9-10: Among the best short stories you've read in published speculative fiction.
+        Name a specific published story it competes with, or don't give 9+.
+  7-8:  Strong, publishable with editorial polish. Specific flaws exist
+        but don't break the reading experience.
+  5-6:  Functional but flat. A competent draft that needs substantial revision.
+  3-4:  Significant problems. Voice breaks, world feels like wallpaper, prose generic.
+  1-2:  Not usable. Rewrite from scratch.
+
+  The MEDIAN score for a competent AI-generated story should be 6.
+
+MANDATORY: For each dimension, identify:
+  (a) The single WEAKEST MOMENT -- quote the specific sentence or passage
+  (b) What would make it better -- a concrete revision, not a vague note
+
+VOICE DEFINITION:
+{voice}
+
+TIMELINE BIBLE (relevant section):
+{bible_section}
+
+CANON (hard facts -- violations are bugs):
+{canon}
+
+STORY BRIEF:
+{story_brief}
+
+THE STORY TO EVALUATE:
+{story_text}
+
+Score these dimensions:
+
+- voice_adherence: Does the prose match the voice definition? Check: sentence
+  rhythm variation, vocabulary, body-before-emotion, the specific tone described.
+
+- experiential_density: Does the reader FEEL what it's like to live in this
+  timeline? Is the world experienced through the senses, or merely described?
+  A story that could be set anywhere with find-and-replace scores 5 max.
+
+- character_specificity: Are the characters distinct humans, not archetypes?
+  Do they speak differently from each other? Do they want something specific?
+  A "drone technician who wants to do a good job" is an archetype. A specific
+  person has contradictions, habits, and a particular way of holding a wrench.
+
+- prose_quality: Sentence variety, specificity, metaphors from the character's
+  experience, show-don't-tell at emotional peaks. QUOTE the weakest sentence.
+
+- canon_compliance: Check ALL facts against the bible and canon. List violations.
+  One major violation caps score at 6.
+
+- world_integration: Does the timeline do WORK in this story? Does it shape
+  choices, constrain possibilities, create the specific dilemma? A story where
+  the world is backdrop scores 5 max.
+
+- completeness: Does the story feel finished? Short stories must land their
+  ending. Is there a TURN -- a moment where something shifts for the character?
+  An ending that merely stops scores 5 max.
+
+- engagement: Would a reader remember this story tomorrow? Is there a moment
+  that surprises? Is there tension? Score 8+ only if the story does something
+  unexpected.
+
+Respond with JSON:
+{{
+  "voice_adherence": {{"score": N, "weakest_moment": "quote", "fix": "...", "note": "..."}},
+  "experiential_density": {{"score": N, "weakest_moment": "...", "fix": "...", "note": "..."}},
+  "character_specificity": {{"score": N, "weakest_moment": "...", "fix": "...", "note": "..."}},
+  "prose_quality": {{"score": N, "weakest_sentence": "quote", "fix": "rewrite", "strongest_sentence": "quote", "note": "..."}},
+  "canon_compliance": {{"score": N, "violations": ["list any found"], "note": "..."}},
+  "world_integration": {{"score": N, "weakest_moment": "...", "fix": "...", "note": "..."}},
+  "completeness": {{"score": N, "weakest_moment": "...", "fix": "...", "note": "..."}},
+  "engagement": {{"score": N, "weakest_moment": "...", "fix": "...", "note": "..."}},
+  "three_weakest_sentences": ["quote 1", "quote 2", "quote 3"],
+  "three_strongest_sentences": ["quote 1", "quote 2", "quote 3"],
+  "ai_patterns_detected": ["list any AI writing patterns found"],
+  "overall_score": N,
+  "weakest_dimension": "...",
+  "top_3_revisions": ["specific, actionable revision 1", "revision 2", "revision 3"]
+}}
+
+FINAL CHECK: If your overall_score is above 7, re-read your weakest_moment
+quotes. If any of them describe a problem that an editor would flag, your
+score is too high.
+"""
+
+
+def load_story(n):
+    """Load a single story file."""
+    return load_file(STORIES_DIR / f"story_{n:02d}.md")
+
+
+def load_all_stories():
+    """Load all story files in order."""
+    stories = {}
+    if not STORIES_DIR.exists():
+        return stories
+    for f in sorted(glob.glob(str(STORIES_DIR / "story_*.md"))):
+        # Skip character files
+        if "_characters" in f:
+            continue
+        num_match = re.search(r'story_(\d+)', f)
+        if num_match:
+            num = int(num_match.group(1))
+            stories[num] = Path(f).read_text()
+    return stories
+
+
+def extract_story_brief(plan_text, story_num):
+    """Extract a specific story's brief from the collection plan."""
+    pattern = rf'####\s*Story\s*{story_num}\b.*?(?=####\s*Story\s*{story_num + 1}\b|$)'
+    match = re.search(pattern, plan_text, re.DOTALL)
+    return match.group(0).strip() if match else "(brief not found)"
+
+
+def evaluate_story(story_num):
+    """Evaluate a single short story."""
+    story_text = load_story(story_num)
+    if not story_text.strip():
+        return {"error": f"Story {story_num} is empty or missing", "overall_score": 0.0}
+
+    voice = load_file(BASE_DIR / "voice.md")
+    canon = load_file(BASE_DIR / "canon.md")
+    bible = load_file(BASE_DIR / "References" / "bible.md")
+    plan = load_file(BASE_DIR / "collection_plan.md")
+
+    story_brief = extract_story_brief(plan, story_num) if plan else "(no plan found)"
+
+    # Truncate bible to relevant section + sensory profile
+    bible_section = bible[:4000] if bible else ""
+
+    prompt = STORY_PROMPT.format(
+        voice=voice,
+        bible_section=bible_section,
+        canon=canon,
+        story_brief=story_brief,
+        story_text=story_text,
+    )
+    raw = call_judge(prompt, max_tokens=8000)
+    result = parse_json_response(raw)
+
+    # Mechanical slop check
+    slop = slop_score(story_text)
+    result["slop"] = slop
+    if "overall_score" in result:
+        adjusted = max(0, result["overall_score"] - slop["slop_penalty"])
+        result["raw_judge_score"] = result["overall_score"]
+        result["overall_score"] = round(adjusted, 2)
+
+    return result
+
+
+# --- Collection Evaluation ---
+
+COLLECTION_PROMPT = """Evaluate this short story collection set in a divergent timeline.
+You have the timeline bible and summaries of all stories.
+
+TIMELINE BIBLE (summary):
+{bible_summary}
+
+STORY SUMMARIES:
+{story_summaries}
+
+Score these collection-level dimensions 0-10:
+
+- coverage: Do the stories span the timeline's eras and perspectives?
+  Are there gaps -- eras, social classes, or experiences not represented?
+
+- variety: Do the stories offer different emotional registers, POV types,
+  and dramatic situations? Or do they feel repetitive?
+
+- coherence: Read together, do the stories build toward the timeline's
+  central question? Does the collection feel intentional, not random?
+
+- world_teaching: After reading all summaries, how well would a reader
+  understand this timeline? Do the stories SHOW the world or merely reference it?
+
+- redundancy: Do any stories overlap -- same era, same type of character,
+  same dramatic situation? Redundancy is the collection's worst enemy.
+
+- ordering: Does the sequence work? Does the first story draw the reader in?
+  Does the last story resonate? Is there a satisfying arc across the collection?
+
+- overall_quality: Averaging across individual story quality, how strong is
+  the collection? One weak story drags everything down.
+
+Respond with JSON:
+{{
+  "coverage": {{"score": N, "note": "..."}},
+  "variety": {{"score": N, "note": "..."}},
+  "coherence": {{"score": N, "note": "..."}},
+  "world_teaching": {{"score": N, "note": "..."}},
+  "redundancy": {{"score": N, "note": "..."}},
+  "ordering": {{"score": N, "note": "..."}},
+  "overall_quality": {{"score": N, "note": "..."}},
+  "collection_score": N,
+  "weakest_story": N,
+  "strongest_story": N,
+  "reorder_suggestion": "suggested reading order if different from current",
+  "top_suggestion": "single highest-leverage improvement for the collection"
+}}
+"""
+
+
+def evaluate_collection():
+    """Evaluate the full short story collection."""
+    stories = load_all_stories()
+    if not stories:
+        return {"error": "No stories found", "collection_score": 0.0}
+
+    bible = load_file(BASE_DIR / "References" / "bible.md")
+
+    # Build story summaries
+    summaries = []
+    for num in sorted(stories.keys()):
+        text = stories[num]
+        word_count = len(text.split())
+        head = text[:500]
+        tail = text[-500:] if len(text) > 500 else ""
+        summaries.append(
+            f"Story {num} ({word_count} words):\n"
+            f"  Opening: {head}...\n"
+            f"  Closing: ...{tail}\n"
+        )
+
+    prompt = COLLECTION_PROMPT.format(
+        bible_summary=bible[:3000] if bible else "(no bible)",
+        story_summaries="\n".join(summaries),
+    )
+    raw = call_judge(prompt)
+    return parse_json_response(raw)
+
+
 # --- Main ---
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate the novel")
+    parser = argparse.ArgumentParser(description="Evaluate novel or short story collection")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--phase", choices=["foundation"],
                        help="Evaluate planning documents")
@@ -798,6 +1035,10 @@ def main():
                        help="Evaluate a specific chapter number")
     group.add_argument("--full", action="store_true",
                        help="Evaluate the entire novel")
+    group.add_argument("--story", type=int,
+                       help="Evaluate a specific short story number")
+    group.add_argument("--collection", action="store_true",
+                       help="Evaluate the full short story collection")
     args = parser.parse_args()
 
     if args.phase == "foundation":
@@ -809,6 +1050,12 @@ def main():
     elif args.full:
         result = evaluate_full()
         score_key = "novel_score"
+    elif args.story is not None:
+        result = evaluate_story(args.story)
+        score_key = "overall_score"
+    elif args.collection:
+        result = evaluate_collection()
+        score_key = "collection_score"
 
     # Print structured output
     print("---")
@@ -824,7 +1071,16 @@ def main():
 
     # Save full eval log
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    mode = args.phase or (f"ch{args.chapter:02d}" if args.chapter else "full")
+    if args.phase:
+        mode = args.phase
+    elif args.chapter is not None:
+        mode = f"ch{args.chapter:02d}"
+    elif args.story is not None:
+        mode = f"story{args.story:02d}"
+    elif args.collection:
+        mode = "collection"
+    else:
+        mode = "full"
     log_path = EVAL_LOG_DIR / f"{timestamp}_{mode}.json"
     with open(log_path, "w") as f:
         json.dump(result, f, indent=2)
